@@ -9,7 +9,6 @@ with open("CFDkey", "r") as apiFile:
 
 
 def apiCall(url: str, team: str, year: str):
-
     headers = {"Authorization": f"Bearer {API_KEY}"}
 
     params = {
@@ -23,17 +22,79 @@ def apiCall(url: str, team: str, year: str):
     return pd.DataFrame(data)
 
 
+def createFullSeasonData(teams: list[str], year: int, isRefresh: bool = False):
+    jsonFileName = f"teamData/{year}_season_data.json"
+    if (isRefresh is False):
+        if (os.path.exists(jsonFileName)):
+            with open(jsonFileName, "r") as jsonFile:
+                fullSeasonRecord = json.load(jsonFile)
+            return fullSeasonRecord
+    
+    fullSeasonRecord = []
+    for team in teams:
+        fullSeasonRecord = fullSeasonRecord + (createSeasonData(team, year, isRefresh))
+
+    fullSeasonRecordJson = json.dumps(fullSeasonRecord)
+    with open(jsonFileName, "w") as jsonFile:
+        jsonFile.write(fullSeasonRecordJson)
+
+    return fullSeasonRecord 
+
+
+def createSeasonData(team: str, year: int, isRefresh: bool = False):
+    gamesRecord = requestTeamRecord(team, year, isRefresh)
+    indexToRemove = []
+    for i in range(len(gamesRecord)):
+        teamData = requestTeamData(gamesRecord[i]["team1"], year)
+        if (teamData == -1):
+            indexToRemove.append(i)
+            continue
+        gamesRecord[i]["team1"] = teamData 
+        teamData = requestTeamData(gamesRecord[i]["team2"], year)
+        if (teamData == -1):
+            indexToRemove.append(i)
+            continue
+        gamesRecord[i]["team2"] = teamData
+
+    for i in indexToRemove:
+        del gamesRecord[i]
+
+    return gamesRecord
+
 def requestTeamRecord(team: str, year: int, isRefresh: bool = False):
     jsonFileName = f"teamData/{team}_{year}_record.json".replace(" ", "")
     if (isRefresh is False):
         if (os.path.exists(jsonFileName)):
             with open(jsonFileName, "r") as jsonFile:
-                statsDict = json.load(jsonFile)
-            return statsDict
+                gamesRecord = json.load(jsonFile)
+            return gamesRecord
 
     dataFrame = apiCall("https://api.collegefootballdata.com/games", team, year)
-    print(dataFrame.loc[5])
+    gamesRecord = []
+    for idx, game in dataFrame.iterrows():
+        locationStr = ""
+        opponentLocationStr = ""
+        if (game["homeTeam"] == team):
+            locationStr = "home"
+            opponentLocationStr = "away"
+        else:
+            locationStr = "away"
+            opponentLocationStr = "home"
+        
+        gameRecord = {}
+        gameRecord["team1"] = game[f"{locationStr}Team"]
+        gameRecord["team2"] = game[f"{opponentLocationStr}Team"]
+        gameRecord["isHome"] = 1 if (locationStr == "home") else 0 
+        gameRecord["winner"] = 1 if (game[f"{locationStr}Points"] > game[f"{opponentLocationStr}Points"]) else 0
+        
+        gamesRecord.append(gameRecord)
 
+    gamesRecordJson = json.dumps(gamesRecord)
+
+    with open(jsonFileName, "w") as jsonFile:
+        jsonFile.write(gamesRecordJson)
+
+    return gamesRecord
 
 def requestTeamData(team: str, year: int, isRefresh: bool = False) -> dict:
 
@@ -46,6 +107,11 @@ def requestTeamData(team: str, year: int, isRefresh: bool = False) -> dict:
             return statsDict
 
     dataFrame = apiCall("https://api.collegefootballdata.com/stats/season", team, year)
+
+    if (dataFrame.empty):
+        print(f"{team} does not have any data for year {year}")
+        return -1
+
     statsDict = dataFrame.set_index("statName")["statValue"].to_dict()
 
     dataFrame = apiCall("https://api.collegefootballdata.com/ratings/elo", team, year)
@@ -88,13 +154,5 @@ def rawStatsToRates(statsDict: dict) -> dict:
 
 
 if __name__ == "__main__":
-
-    teamOneStatsDict = requestTeamData("Oregon State", 2025)
-    teamTwoStatsDict = requestTeamData("Oregon", 2025)
-    teamOneRatesDict = rawStatsToRates(teamOneStatsDict)
-    teamTwoRatesDict = rawStatsToRates(teamTwoStatsDict)
-
-    print(f"Team 1:\n{teamOneRatesDict}")
-    print(f"Team 2:\n{teamTwoRatesDict}")
-
-    requestTeamRecord("Oregon State", 2024)
+    gamesRecord = createFullSeasonData({"Oregon State", "Oregon", "California"}, 2024)
+    print(gamesRecord[0])
