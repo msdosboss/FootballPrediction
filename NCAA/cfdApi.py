@@ -24,7 +24,7 @@ def apiCall(url: str, team: str, year: str):
 
 
 def requestTeamRecord(team: str, year: int, isRefresh: bool = False):
-    jsonFileName = f"teamData/{team}_{year}.json".replace(" ", "")
+    jsonFileName = f"teamData/{team}_{year}_record.json".replace(" ", "")
     if (isRefresh is False):
         if (os.path.exists(jsonFileName)):
             with open(jsonFileName, "r") as jsonFile:
