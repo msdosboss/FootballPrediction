@@ -11,6 +11,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 
+
 def createDataSet(gamesFeatures: list[dict]):
     df = pd.DataFrame(gamesFeatures)
 
@@ -85,17 +86,17 @@ def createFeatures(gamesRecord: list[dict]) -> list[dict]:
     return gamesFeatures
 
 
-def trainModel(X_train: object, y_train: object, scaler: object) -> object:
+def trainModel(X_train: object, y_train: object, scaler: object, modelFileName: str = "log_reg_model.pkl") -> object:
     model = LogisticRegression(max_iter=1000)
     model.fit(X_train, y_train)
 
-    with open("log_reg_model.pkl", "wb") as f:
+    with open(modelFileName, "wb") as f:
         pickle.dump({"model": model, "scaler": scaler}, f)
 
     return model
 
 
-def loadModel(modelFileName: str = "log_reg_model") -> object:
+def loadModel(modelFileName: str = "log_reg_model.pkl") -> object:
     with open(modelFileName, "rb") as f:
         data = pickle.load(f)
 
