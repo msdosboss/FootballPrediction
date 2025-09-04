@@ -11,23 +11,42 @@ with open("CFDkey", "r") as apiFile:
 
 def apiCall(url: str, params: dict):
     headers = {"Authorization": f"Bearer {API_KEY}"}
-
     response = requests.get(url, headers=headers, params=params)
     data = response.json()
+
+    print("api call being made")
+    # If it's not a list, wrap it in one
+    if isinstance(data, dict):
+        if len(data) == 0:
+            return pd.DataFrame()  # empty response
+        if "message" in data:  # error response from API
+            print(f"API error: {data}")
+            return pd.DataFrame()
+        data = [data]
 
     return pd.DataFrame(data)
 
 
-def getAllTeams() -> list[str]:
+def getAllTeams(year: int, isRefresh: bool = False) -> list[str]:
+    jsonFileName = f"teamData/teamsList_{year}.json"
+    if (isRefresh is False):
+        if (os.path.exists(jsonFileName)):
+            with open(jsonFileName, "r") as jsonFile:
+                return json.load(jsonFile)
+
     url = "https://api.collegefootballdata.com/teams/fbs"
-    params = {"year": 2024}
+    params = {"year": year}
     dataFrame = apiCall(url, params)
+    
 
     teamsInfoList = dataFrame.values.tolist()
     teamsList = []
     for teamInfoList in teamsInfoList:
         #extracting the name from the teams info
         teamsList.append(teamInfoList[1])
+
+    with open(jsonFileName, "w") as jsonFile:
+        json.dump(teamsList, jsonFile)
 
     return teamsList
 
@@ -57,13 +76,14 @@ def createFullSeasonData(teams: list[str], year: int, isRefresh: bool = False):
 
 def createSeasonData(team: str, year: int, isRefresh: bool = False):
     gamesRecord = requestTeamRecord(team, year, isRefresh)
-    indexToRemove = []
-    for i in range(len(gamesRecord)):
+    
+    i = 0
+    while (i < len(gamesRecord)):
         endWeek = gamesRecord[i]["week"] - 1
 
         teamData = requestTeamData(gamesRecord[i]["team1"], year, endWeek)
         if (teamData == -1):
-            indexToRemove.append(i)
+            del gamesRecord[i]
             continue
         
         try:
@@ -75,7 +95,7 @@ def createSeasonData(team: str, year: int, isRefresh: bool = False):
         gamesRecord[i]["team1"] = teamData 
         teamData = requestTeamData(gamesRecord[i]["team2"], year, endWeek)
         if (teamData == -1):
-            indexToRemove.append(i)
+            del gamesRecord[i]
             continue
         
         try:
@@ -85,14 +105,15 @@ def createSeasonData(team: str, year: int, isRefresh: bool = False):
             raise
         
         gamesRecord[i]["team2"] = teamData
-
-    for i in indexToRemove:
-        del gamesRecord[i]
+        i += 1
 
     return gamesRecord
 
 def requestTeamRecord(team: str, year: int, isRefresh: bool = False) -> list:
     jsonFileName = f"teamData/{team}_{year}_record.json".replace(" ", "")
+    #THIS SHOULD REMOVED AT SOME POINT
+    isRefresh = False
+    #THIS SHOULD REMOVED AT SOME POINT
     if (isRefresh is False):
         if (os.path.exists(jsonFileName)):
             with open(jsonFileName, "r") as jsonFile:
@@ -133,14 +154,19 @@ def requestTeamRecord(team: str, year: int, isRefresh: bool = False) -> list:
 
     return gamesRecord
 
-def requestTeamData(team: str, year: int, endWeek: int = 20, isRefresh: bool = False) -> dict:
 
+def requestTeamData(team: str, year: int, endWeek: int = 20, isRefresh: bool = False) -> dict:
     jsonFileName = f"teamData/{team}_{year}_{endWeek}.json".replace(" ", "")
+    #THIS SHOULD REMOVED AT SOME POINT
+    isRefresh = False
+    #THIS SHOULD REMOVED AT SOME POINT
 
     if (isRefresh is False):
         if (os.path.exists(jsonFileName)):
             with open(jsonFileName, "r") as jsonFile:
                 statsDict = json.load(jsonFile)
+                if "_no_data" in statsDict:
+                    return -1
             return statsDict
 
     params = {
@@ -151,8 +177,11 @@ def requestTeamData(team: str, year: int, endWeek: int = 20, isRefresh: bool = F
 
     dataFrame = apiCall("https://api.collegefootballdata.com/stats/season", params)
 
-    if (dataFrame.empty):
+    if dataFrame.empty:
         print(f"{team} does not have any data for year {year}")
+        statsDict = {"_no_data": True}  # sentinel flag
+        with open(jsonFileName, "w") as jsonFile:
+            json.dump(statsDict, jsonFile)
         return -1
 
     statsDict = dataFrame.set_index("statName")["statValue"].to_dict()
