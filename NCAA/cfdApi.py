@@ -2,19 +2,15 @@ import requests
 import pandas as pd
 import json
 import os
+import hashlib
 
 
 with open("CFDkey", "r") as apiFile:
     API_KEY = apiFile.read().replace("\n", "")
 
 
-def apiCall(url: str, team: str, year: str):
+def apiCall(url: str, params: dict):
     headers = {"Authorization": f"Bearer {API_KEY}"}
-
-    params = {
-        "year": year,
-        "team": team
-    }
 
     response = requests.get(url, headers=headers, params=params)
     data = response.json()
@@ -22,38 +18,72 @@ def apiCall(url: str, team: str, year: str):
     return pd.DataFrame(data)
 
 
+def getAllTeams() -> list[str]:
+    url = "https://api.collegefootballdata.com/teams/fbs"
+    params = {"year": 2024}
+    dataFrame = apiCall(url, params)
+
+    teamsInfoList = dataFrame.values.tolist()
+    teamsList = []
+    for teamInfoList in teamsInfoList:
+        #extracting the name from the teams info
+        teamsList.append(teamInfoList[1])
+
+    return teamsList
+
+
 def createFullSeasonData(teams: list[str], year: int, isRefresh: bool = False):
-    jsonFileName = f"teamData/{year}_season_data.json"
-    if (isRefresh is False):
-        if (os.path.exists(jsonFileName)):
-            with open(jsonFileName, "r") as jsonFile:
-                fullSeasonRecord = json.load(jsonFile)
-            return fullSeasonRecord
+    # Sort teams so the hash is consistent regardless of input order
+    teams_sorted = sorted(teams)
+    teams_str = "_".join(teams_sorted)
+
+    teams_hash = hashlib.sha256(teams_str.encode()).hexdigest()[:8]
+
+    jsonFileName = f"teamData/{year}_{teams_hash}_season_data.json"
+
+    if not isRefresh and os.path.exists(jsonFileName):
+        with open(jsonFileName, "r") as jsonFile:
+            return json.load(jsonFile)
     
     fullSeasonRecord = []
-    for team in teams:
-        fullSeasonRecord = fullSeasonRecord + (createSeasonData(team, year, isRefresh))
+    for team in teams_sorted:
+        fullSeasonRecord.extend(createSeasonData(team, year, isRefresh))
 
-    fullSeasonRecordJson = json.dumps(fullSeasonRecord)
     with open(jsonFileName, "w") as jsonFile:
-        jsonFile.write(fullSeasonRecordJson)
+        json.dump(fullSeasonRecord, jsonFile)
 
-    return fullSeasonRecord 
+    return fullSeasonRecord
 
 
 def createSeasonData(team: str, year: int, isRefresh: bool = False):
     gamesRecord = requestTeamRecord(team, year, isRefresh)
     indexToRemove = []
     for i in range(len(gamesRecord)):
-        teamData = requestTeamData(gamesRecord[i]["team1"], year)
+        endWeek = gamesRecord[i]["week"] - 1
+
+        teamData = requestTeamData(gamesRecord[i]["team1"], year, endWeek)
         if (teamData == -1):
             indexToRemove.append(i)
             continue
+        
+        try:
+            teamData = rawStatsToRates(teamData)
+        except KeyError as e:
+            print(f"Missing key {e} for team {gamesRecord[i]['team1']} in week {endWeek}, data={teamData}")
+            raise
+        
         gamesRecord[i]["team1"] = teamData 
-        teamData = requestTeamData(gamesRecord[i]["team2"], year)
+        teamData = requestTeamData(gamesRecord[i]["team2"], year, endWeek)
         if (teamData == -1):
             indexToRemove.append(i)
             continue
+        
+        try:
+            teamData = rawStatsToRates(teamData)
+        except KeyError as e:
+            print(f"Missing key {e} for team {gamesRecord[i]['team2']} in week {endWeek}, data={teamData}")
+            raise
+        
         gamesRecord[i]["team2"] = teamData
 
     for i in indexToRemove:
@@ -61,7 +91,7 @@ def createSeasonData(team: str, year: int, isRefresh: bool = False):
 
     return gamesRecord
 
-def requestTeamRecord(team: str, year: int, isRefresh: bool = False):
+def requestTeamRecord(team: str, year: int, isRefresh: bool = False) -> list:
     jsonFileName = f"teamData/{team}_{year}_record.json".replace(" ", "")
     if (isRefresh is False):
         if (os.path.exists(jsonFileName)):
@@ -69,7 +99,12 @@ def requestTeamRecord(team: str, year: int, isRefresh: bool = False):
                 gamesRecord = json.load(jsonFile)
             return gamesRecord
 
-    dataFrame = apiCall("https://api.collegefootballdata.com/games", team, year)
+    params = {
+        "team" : team,
+        "year" : year
+    }
+
+    dataFrame = apiCall("https://api.collegefootballdata.com/games", params)
     gamesRecord = []
     for idx, game in dataFrame.iterrows():
         locationStr = ""
@@ -84,9 +119,11 @@ def requestTeamRecord(team: str, year: int, isRefresh: bool = False):
         gameRecord = {}
         gameRecord["team1"] = game[f"{locationStr}Team"]
         gameRecord["team2"] = game[f"{opponentLocationStr}Team"]
+        gameRecord["team1Elo"] = game[f"{locationStr}PregameElo"]
+        gameRecord["team2Elo"] = game[f"{opponentLocationStr}PregameElo"]
         gameRecord["isHome"] = 1 if (locationStr == "home") else 0 
         gameRecord["winner"] = 1 if (game[f"{locationStr}Points"] > game[f"{opponentLocationStr}Points"]) else 0
-        
+        gameRecord["week"] = game["week"]
         gamesRecord.append(gameRecord)
 
     gamesRecordJson = json.dumps(gamesRecord)
@@ -96,9 +133,9 @@ def requestTeamRecord(team: str, year: int, isRefresh: bool = False):
 
     return gamesRecord
 
-def requestTeamData(team: str, year: int, isRefresh: bool = False) -> dict:
+def requestTeamData(team: str, year: int, endWeek: int = 20, isRefresh: bool = False) -> dict:
 
-    jsonFileName = f"teamData/{team}_{year}.json".replace(" ", "")
+    jsonFileName = f"teamData/{team}_{year}_{endWeek}.json".replace(" ", "")
 
     if (isRefresh is False):
         if (os.path.exists(jsonFileName)):
@@ -106,17 +143,19 @@ def requestTeamData(team: str, year: int, isRefresh: bool = False) -> dict:
                 statsDict = json.load(jsonFile)
             return statsDict
 
-    dataFrame = apiCall("https://api.collegefootballdata.com/stats/season", team, year)
+    params = {
+        "team" : team,
+        "year" : year,
+        "endWeek" : endWeek # default is 20 meaning all weeks
+    }
+
+    dataFrame = apiCall("https://api.collegefootballdata.com/stats/season", params)
 
     if (dataFrame.empty):
         print(f"{team} does not have any data for year {year}")
         return -1
 
     statsDict = dataFrame.set_index("statName")["statValue"].to_dict()
-
-    dataFrame = apiCall("https://api.collegefootballdata.com/ratings/elo", team, year)
-
-    statsDict["elo"] = int(dataFrame.loc[0, "elo"])
 
     statsDictJson = json.dumps(statsDict)
 
@@ -126,33 +165,50 @@ def requestTeamData(team: str, year: int, isRefresh: bool = False) -> dict:
     return statsDict
 
 
+def safeDiv(a, b):
+    return a / b if b != 0 else 1
+
+
 def rawStatsToRates(statsDict: dict) -> dict:
+    def keyCheck(k):
+        return statsDict.get(k, 0)  # default to 0 if missing
+    
     ratesDict = {}
+    ratesDict["passingEfficiency"] = safeDiv(keyCheck("netPassingYards"), keyCheck("passAttempts"))
+    ratesDict["completionPercent"] = safeDiv(keyCheck("passCompletions"), keyCheck("passAttempts"))
+    ratesDict["yardsPerRush"] = safeDiv(keyCheck("rushingYards"), keyCheck("rushingAttempts"))
+    ratesDict["thirdDownConversionRate"] = safeDiv(keyCheck("thirdDownConversions"), keyCheck("thirdDowns"))
+    ratesDict["fourthDownConversionRate"] = safeDiv(keyCheck("fourthDownConversions"), keyCheck("fourthDowns"))
 
-    ratesDict["passingEfficiency"] = statsDict["netPassingYards"] / statsDict["passAttempts"]
-    ratesDict["completionPercent"] = statsDict["passCompletions"] / statsDict["passAttempts"]
-    ratesDict["yardsPerRush"] = statsDict["rushingYards"] / statsDict["rushingAttempts"]
-    ratesDict["thirdDownConversionRate"] = statsDict["thirdDownConversions"] / statsDict["thirdDowns"]
-    ratesDict["fourthDownConversionRate"] = statsDict["fourthDownConversions"] / statsDict["fourthDowns"]
+    ratesDict["turnoverMargin"] = keyCheck("turnoversOpponent") - keyCheck("turnovers")
+    ratesDict["penalties"] = keyCheck("penalties")
+    ratesDict["yardsPerPenalty"] = safeDiv(keyCheck("penaltyYards"), keyCheck("penalties"))
+    ratesDict["yardsPerPlay"] = safeDiv(
+        keyCheck("totalYards"), keyCheck("rushingAttempts") + keyCheck("passAttempts")
+    )
+    ratesDict["possessionRatio"] = safeDiv(keyCheck("possessionTime"), keyCheck("possessionTimeOpponent"))
+    ratesDict["sacks"] = keyCheck("sacks")
+    ratesDict["sacksOpponent"] = keyCheck("sacksOpponent")
 
-    ratesDict["turnoverMargin"] = statsDict["turnoversOpponent"] - statsDict["turnovers"]
-    ratesDict["penalties"] = statsDict["penalties"]
-    ratesDict["yardsPerPenalty"] = statsDict["penaltyYards"] / statsDict["penalties"]
-    ratesDict["yardsPerPlay"] = statsDict["totalYards"] / (statsDict["rushingAttempts"] + statsDict["passAttempts"])
-    ratesDict["possessionRatio"] = statsDict["possessionTime"] / statsDict["possessionTimeOpponent"]
-    ratesDict["sacks"] = statsDict["sacks"]
-    ratesDict["sacksOpponent"] = statsDict["sacksOpponent"]
-    ratesDict["elo"] = statsDict["elo"]
-
-    ratesDict["passingefficiencyOpponent"] = statsDict["netPassingYardsOpponent"] / statsDict["passAttemptsOpponent"]
-    ratesDict["completionPercentOpponent"] = statsDict["passCompletionsOpponent"] / statsDict["passAttemptsOpponent"]
-    ratesDict["yardsPerRushOpponent"] = statsDict["rushingYardsOpponent"] / statsDict["rushingAttemptsOpponent"]
-    ratesDict["thirdDownConversionRateOpponent"] = statsDict["thirdDownConversionsOpponent"] / statsDict["thirdDownsOpponent"]
-    ratesDict["fourthDownConversionRateOpponent"] = statsDict["fourthDownConversionsOpponent"] / statsDict["fourthDownsOpponent"]
+    ratesDict["passingefficiencyOpponent"] = safeDiv(
+        keyCheck("netPassingYardsOpponent"), keyCheck("passAttemptsOpponent")
+    )
+    ratesDict["completionPercentOpponent"] = safeDiv(
+        keyCheck("passCompletionsOpponent"), keyCheck("passAttemptsOpponent")
+    )
+    ratesDict["yardsPerRushOpponent"] = safeDiv(
+        keyCheck("rushingYardsOpponent"), keyCheck("rushingAttemptsOpponent")
+    )
+    ratesDict["thirdDownConversionRateOpponent"] = safeDiv(
+        keyCheck("thirdDownConversionsOpponent"), keyCheck("thirdDownsOpponent")
+    )
+    ratesDict["fourthDownConversionRateOpponent"] = safeDiv(
+        keyCheck("fourthDownConversionsOpponent"), keyCheck("fourthDownsOpponent")
+    )
 
     return ratesDict
 
 
 if __name__ == "__main__":
-    gamesRecord = createFullSeasonData({"Oregon State", "Oregon", "California"}, 2024)
-    print(gamesRecord[0])
+    print(requestTeamData("Boston College", 2024, 1))
+    
