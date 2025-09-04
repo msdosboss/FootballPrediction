@@ -2,6 +2,23 @@ from cfdApi import createFullSeasonData
 from cfdApi import safeDiv
 from cfdApi import getAllTeams
 
+import pickle
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+
+
+def createDataSet(gamesFeatures: list[dict]):
+    df = pd.DataFrame(gamesFeatures)
+
+    X = df.drop(columns=["winner"])
+    y = df["winner"]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    return X_train, y_train, X_test, y_test
+
 
 def createFeatures(gamesRecord: list[dict]) -> list[dict]:
     gamesFeatures = []
@@ -66,8 +83,43 @@ def createFeatures(gamesRecord: list[dict]) -> list[dict]:
     return gamesFeatures
 
 
+def trainModel(X_train: object, y_train: object) -> object:
+    model = LogisticRegression(max_iter=1000)
+    model.fit(X_train, y_train)
+
+    with open("log_reg_model.pkl", "wb") as f:
+        pickle.dump(model, f)
+
+    return model
+
+
+def loadModel(modelFileName: str = "log_reg_model") -> object:
+    with open(modelFileName, "rb") as f:
+        model = pickle.load(f)
+
+    return model
+
+
+def evalulateModel(model: object, X_test, y_test):
+    y_pred = model.predict(X_test)
+    print(f"Accuracy: {accuracy_score(y_test, y_pred)}")
+
+
+def printFeatureImportance(model, X):
+    feature_importance = pd.DataFrame({
+        "feature": X.columns,
+        "coefficient": model.coef_[0]
+    }).sort_values("coefficient", ascending=False)
+
+    print(feature_importance)
+
+
 if __name__ == "__main__":
     teamsList = getAllTeams(2024)
     gamesRecord = createFullSeasonData(teamsList, 2024)
     gamesFeatures = createFeatures(gamesRecord)
-    print(gamesFeatures[1])
+
+    X_train, y_train, X_test, y_test = createDataSet(gamesFeatures)
+    model = trainModel(X_train, y_train)
+    evalulateModel(model, X_test, y_test)
+    printFeatureImportance(model, X_train)

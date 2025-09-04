@@ -37,12 +37,11 @@ def getAllTeams(year: int, isRefresh: bool = False) -> list[str]:
     url = "https://api.collegefootballdata.com/teams/fbs"
     params = {"year": year}
     dataFrame = apiCall(url, params)
-    
 
     teamsInfoList = dataFrame.values.tolist()
     teamsList = []
     for teamInfoList in teamsInfoList:
-        #extracting the name from the teams info
+        # extracting the name from the teams info
         teamsList.append(teamInfoList[1])
 
     with open(jsonFileName, "w") as jsonFile:
