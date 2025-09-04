@@ -7,7 +7,9 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
-
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
 
 def createDataSet(gamesFeatures: list[dict]):
     df = pd.DataFrame(gamesFeatures)
@@ -83,21 +85,21 @@ def createFeatures(gamesRecord: list[dict]) -> list[dict]:
     return gamesFeatures
 
 
-def trainModel(X_train: object, y_train: object) -> object:
+def trainModel(X_train: object, y_train: object, scaler: object) -> object:
     model = LogisticRegression(max_iter=1000)
     model.fit(X_train, y_train)
 
     with open("log_reg_model.pkl", "wb") as f:
-        pickle.dump(model, f)
+        pickle.dump({"model": model, "scaler": scaler}, f)
 
     return model
 
 
 def loadModel(modelFileName: str = "log_reg_model") -> object:
     with open(modelFileName, "rb") as f:
-        model = pickle.load(f)
+        data = pickle.load(f)
 
-    return model
+    return data["model"], data["scaler"]
 
 
 def evalulateModel(model: object, X_test, y_test):
@@ -105,9 +107,9 @@ def evalulateModel(model: object, X_test, y_test):
     print(f"Accuracy: {accuracy_score(y_test, y_pred)}")
 
 
-def printFeatureImportance(model, X):
+def printFeatureImportance(model, featuresNames):
     feature_importance = pd.DataFrame({
-        "feature": X.columns,
+        "feature": featuresNames,
         "coefficient": model.coef_[0]
     }).sort_values("coefficient", ascending=False)
 
@@ -120,6 +122,22 @@ if __name__ == "__main__":
     gamesFeatures = createFeatures(gamesRecord)
 
     X_train, y_train, X_test, y_test = createDataSet(gamesFeatures)
-    model = trainModel(X_train, y_train)
+
+    featuresNames = X_train.columns
+
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
+
+    model = trainModel(X_train, y_train, scaler)
     evalulateModel(model, X_test, y_test)
-    printFeatureImportance(model, X_train)
+    printFeatureImportance(model, featuresNames)
+
+    X_train, y_train, X_test, y_test = createDataSet(gamesFeatures)
+    model = RandomForestClassifier(n_estimators=500, random_state=42)
+    model.fit(X_train, y_train)
+    print("randomForest accuracy: " + str(model.score(X_test, y_test)))
+
+    model = XGBClassifier(n_estimators=500, learning_rate=0.05, max_depth=4, random_state=42)
+    model.fit(X_train, y_train)
+    print("xgb accuracy: " + str(model.score(X_test, y_test)))
