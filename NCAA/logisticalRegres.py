@@ -68,6 +68,6 @@ def createFeatures(gamesRecord: list[dict]) -> list[dict]:
 
 if __name__ == "__main__":
     teamsList = getAllTeams(2024)
-    gamesRecord = createFullSeasonData(teamsList, 2024, True)
+    gamesRecord = createFullSeasonData(teamsList, 2024)
     gamesFeatures = createFeatures(gamesRecord)
     print(gamesFeatures[1])
